@@ -1,24 +1,42 @@
-# RHCS IMAGE
-# RHCS VERSION: 3
+# CEPH DAEMON IMAGE
+# CEPH VERSION: Luminous
+# CEPH VERSION DETAIL: 12.x.x
 
-FROM rhel7:7.3-released
-LABEL Maintainer="Sebastien Han 'seb@redhat.com'"
+FROM ubuntu:16.04
+MAINTAINER Sébastien Han "seb@redhat.com"
 
-ENV container docker
+ENV CEPH_VERSION luminous
+ENV CONFD_VERSION 0.10.0
+ENV KUBECTL_VERSION v1.6.0
 
-ARG PACKAGES="ceph-mon ceph-osd ceph-mds ceph-radosgw rbd-mirror nfs-ganesha-rgw"
-RUN yum -y update && \
-    yum -y install $PACKAGES && \
-    rpm -q $PACKAGES && \
-    yum clean all
+# Download confd
+ADD https://github.com/kelseyhightower/confd/releases/download/v${CONFD_VERSION}/confd-${CONFD_VERSION}-linux-amd64 /usr/local/bin/confd
 
-# Editing /etc/redhat-storage-server release file
-RUN echo "Red Hat Ceph Storage Server 3 (Container)" > /etc/redhat-storage-release
+# Download forego
+ADD https://bin.equinox.io/c/ekMN3bCZFUn/forego-stable-linux-amd64.tgz /forego.tgz
 
-EXPOSE 6789 6800 6801 6802 6803 6804 6805 80 5000
+# Packages list
+ARG PACKAGES="ceph-mon ceph-osd ceph-mds ceph-mgr ceph-base ceph-common radosgw rbd-mirror sharutils etcd"
 
-# Add volumes for Ceph config and data
-VOLUME ["/etc/ceph","/var/lib/ceph","/etc/ganesha"]
+# install prerequisites
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y wget unzip uuid-runtime python-setuptools udev dmsetup && \
+\
+# Install ceph, ganesha and etcd
+    wget -q -O- 'https://download.ceph.com/keys/release.asc' | apt-key add - && \
+    echo "deb http://download.ceph.com/debian-$CEPH_VERSION/ xenial main" | tee /etc/apt/sources.list.d/ceph-$CEPH_VERSION.list && \
+    apt-get update && apt-get install -y --force-yes $PACKAGES && \
+    dpkg -s $PACKAGES && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+\
+# Install confd
+    chmod +x /usr/local/bin/confd && mkdir -p /etc/confd/conf.d && mkdir -p /etc/confd/templates && \
+\
+# Install forego
+    cd /usr/local/bin && tar xfz /forego.tgz && chmod +x /usr/local/bin/forego && rm /forego.tgz
+
+# Install kubectl
+ADD https://storage.googleapis.com/kubernetes-release/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl /usr/local/bin/kubectl
+RUN chmod +x /usr/local/bin/kubectl
 
 # Add bootstrap script, ceph defaults key/values for KV store
 ADD *.sh ceph.defaults check_zombie_mons.py ./osd_scenarios/* entrypoint.sh.in disabled_scenario /
@@ -28,17 +46,13 @@ RUN chmod +x /generate_entrypoint.sh && \
   bash -c "/generate_entrypoint.sh" && \
   rm -f /generate_entrypoint.sh
 
+# Add templates for confd
+ADD ./confd/templates/* /etc/confd/templates/
+ADD ./confd/conf.d/* /etc/confd/conf.d/
+
+# Add volumes for Ceph config and data
+VOLUME ["/etc/ceph","/var/lib/ceph", "/etc/ganesha"]
+
 # Execute the entrypoint
 WORKDIR /
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Atomic specific labels
-ADD install.sh /install.sh
-LABEL version=3
-LABEL run="/usr/bin/docker run -d --net=host --pid=host -e MON_NAME=\${MON_NAME} -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -v /etc/ceph:/etc/ceph -v /var/lib/ceph:/var/lib/ceph \${IMAGE}"
-LABEL install="/usr/bin/docker run --rm --privileged -v /:/host -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -e MON_NAME=\${MON_NAME} -e OSD_DEVICE=\${OSD_DEVICE} -e HOST=/host -e IMAGE=\${IMAGE} --entrypoint=/install.sh \${IMAGE}"
-
-# Build specific labels
-LABEL com.redhat.component="rhceph-rhel7-docker"
-LABEL name="rhceph"
-LABEL description="Red Hat Ceph Storage 3"
