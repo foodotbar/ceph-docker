@@ -1,24 +1,27 @@
-# RHCS IMAGE
-# RHCS VERSION: 3
+# CEPH DAEMON IMAGE
+# CEPH VERSION: Kraken
+# CEPH VERSION DETAIL: 11.1.X
 
-FROM rhel7:7.3-released
-LABEL Maintainer="Sebastien Han 'seb@redhat.com'"
+FROM centos:7
+MAINTAINER Sébastien Han "seb@redhat.com"
 
-ENV container docker
+ENV CEPH_VERSION kraken
+ENV CONFD_VERSION 0.10.0
 
-ARG PACKAGES="ceph-mon ceph-osd ceph-mds ceph-radosgw rbd-mirror nfs-ganesha-rgw"
-RUN yum -y update && \
-    yum -y install $PACKAGES && \
-    rpm -q $PACKAGES && \
-    yum clean all
+# Install Ceph
+RUN rpm --import 'https://download.ceph.com/keys/release.asc'
+RUN rpm -Uvh http://download.ceph.com/rpm-${CEPH_VERSION}/el7/noarch/ceph-release-1-1.el7.noarch.rpm
+RUN yum install -y epel-release && yum clean all
+ARG PACKAGES="unzip ceph-mon ceph-osd ceph-mds ceph-mgr ceph-base ceph-common ceph-radosgw rbd-mirror device-mapper sharutils etcd kubernetes-client"
+RUN yum install -y $PACKAGES && rpm -q $PACKAGES && yum clean all
 
-# Editing /etc/redhat-storage-server release file
-RUN echo "Red Hat Ceph Storage Server 3 (Container)" > /etc/redhat-storage-release
+# Install confd
+ADD https://github.com/kelseyhightower/confd/releases/download/v${CONFD_VERSION}/confd-${CONFD_VERSION}-linux-amd64 /usr/local/bin/confd
+RUN chmod +x /usr/local/bin/confd && mkdir -p /etc/confd/conf.d && mkdir -p /etc/confd/templates
 
-EXPOSE 6789 6800 6801 6802 6803 6804 6805 80 5000
-
-# Add volumes for Ceph config and data
-VOLUME ["/etc/ceph","/var/lib/ceph","/etc/ganesha"]
+# Download forego
+ADD https://bin.equinox.io/c/ekMN3bCZFUn/forego-stable-linux-amd64.tgz /forego.tgz
+RUN cd /usr/local/bin && tar xfz /forego.tgz && chmod +x /usr/local/bin/forego && rm /forego.tgz
 
 # Add bootstrap script, ceph defaults key/values for KV store
 ADD *.sh ceph.defaults check_zombie_mons.py ./osd_scenarios/* entrypoint.sh.in disabled_scenario /
@@ -28,17 +31,13 @@ RUN chmod +x /generate_entrypoint.sh && \
   bash -c "/generate_entrypoint.sh" && \
   rm -f /generate_entrypoint.sh
 
+# Add templates for confd
+ADD ./confd/templates/* /etc/confd/templates/
+ADD ./confd/conf.d/* /etc/confd/conf.d/
+
+# Add volumes for Ceph config and data
+VOLUME ["/etc/ceph","/var/lib/ceph", "/etc/ganesha"]
+
 # Execute the entrypoint
 WORKDIR /
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Atomic specific labels
-ADD install.sh /install.sh
-LABEL version=3
-LABEL run="/usr/bin/docker run -d --net=host --pid=host -e MON_NAME=\${MON_NAME} -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -v /etc/ceph:/etc/ceph -v /var/lib/ceph:/var/lib/ceph \${IMAGE}"
-LABEL install="/usr/bin/docker run --rm --privileged -v /:/host -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -e MON_NAME=\${MON_NAME} -e OSD_DEVICE=\${OSD_DEVICE} -e HOST=/host -e IMAGE=\${IMAGE} --entrypoint=/install.sh \${IMAGE}"
-
-# Build specific labels
-LABEL com.redhat.component="rhceph-rhel7-docker"
-LABEL name="rhceph"
-LABEL description="Red Hat Ceph Storage 3"
