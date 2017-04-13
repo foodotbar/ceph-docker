@@ -1,44 +1,33 @@
-# RHCS IMAGE
-# RHCS VERSION: 3
+# DOCKER-VERSION 1.0.0
+#
+# Ceph Daemon
+#
+# VERSION 0.0.1
 
-FROM rhel7:7.3-released
-LABEL Maintainer="Sebastien Han 'seb@redhat.com'"
+FROM ceph/base:tag-build-master-hammer-centos-7
+MAINTAINER Sébastien Han "seb@redhat.com"
 
-ENV container docker
+# Add bootstrap script
+ADD entrypoint.sh /entrypoint.sh
+ADD remove-mon.sh /remove-mon.sh
+ADD config.*.sh /
 
-ARG PACKAGES="ceph-mon ceph-osd ceph-mds ceph-radosgw rbd-mirror nfs-ganesha-rgw"
-RUN yum -y update && \
-    yum -y install $PACKAGES && \
-    rpm -q $PACKAGES && \
-    yum clean all
+ADD my_init/my_init /sbin/my_init
+RUN chmod +x /sbin/my_init
+RUN mkdir -p /etc/container_environment
 
-# Editing /etc/redhat-storage-server release file
-RUN echo "Red Hat Ceph Storage Server 3 (Container)" > /etc/redhat-storage-release
+ADD 2.sh /etc/runit/2
+RUN chmod +x /etc/runit/2
 
-EXPOSE 6789 6800 6801 6802 6803 6804 6805 80 5000
+# Add templates for confd
+ADD ./confd/templates/* /etc/confd/templates/
+ADD ./confd/conf.d/* /etc/confd/conf.d/
+
+ADD check_zombie_mons.py /check_zombie_mons.py
 
 # Add volumes for Ceph config and data
-VOLUME ["/etc/ceph","/var/lib/ceph","/etc/ganesha"]
-
-# Add bootstrap script, ceph defaults key/values for KV store
-ADD *.sh ceph.defaults check_zombie_mons.py ./osd_scenarios/* entrypoint.sh.in disabled_scenario /
-
-# Modify the entrypoint
-RUN chmod +x /generate_entrypoint.sh && \
-  bash -c "/generate_entrypoint.sh" && \
-  rm -f /generate_entrypoint.sh
+VOLUME ["/etc/ceph","/var/lib/ceph"]
 
 # Execute the entrypoint
 WORKDIR /
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Atomic specific labels
-ADD install.sh /install.sh
-LABEL version=3
-LABEL run="/usr/bin/docker run -d --net=host --pid=host -e MON_NAME=\${MON_NAME} -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -v /etc/ceph:/etc/ceph -v /var/lib/ceph:/var/lib/ceph \${IMAGE}"
-LABEL install="/usr/bin/docker run --rm --privileged -v /:/host -e MON_IP=\${MON_IP}  -e CEPH_PUBLIC_NETWORK=\${CEPH_PUBLIC_NETWORK} -e CEPH_DAEMON=\${CEPH_DAEMON} -e MON_NAME=\${MON_NAME} -e OSD_DEVICE=\${OSD_DEVICE} -e HOST=/host -e IMAGE=\${IMAGE} --entrypoint=/install.sh \${IMAGE}"
-
-# Build specific labels
-LABEL com.redhat.component="rhceph-rhel7-docker"
-LABEL name="rhceph"
-LABEL description="Red Hat Ceph Storage 3"
